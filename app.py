@@ -1,75 +1,66 @@
 import streamlit as st
 import pandas as pd
 import requests
-import plotly.graph_objects as go
 import ta
 
-# ---------------------------
-# Configuration
-# ---------------------------
-st.set_page_config(page_title="USD/JPY Signal Tool", layout="wide")
-st.title("📈 USD/JPY Signal Generator (EMA + RSI Strategy)")
+# Title
+st.title("USD/JPY Signal Generator")
+st.caption("EMA(9/21) + RSI(14) strategy (No charts)")
 
-# ---------------------------
-# Data Fetching
-# ---------------------------
+# Fetch data from Alpha Vantage
 @st.cache_data(ttl=3600)
-def get_fx_data():
-    API_KEY = "demo"  # Replace with your Alpha Vantage API key
-    SYMBOL = "USDJPY"
-    INTERVAL = "60min"
-
-    url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=USD&to_symbol=JPY&interval={INTERVAL}&outputsize=full&apikey={API_KEY}"
-    r = requests.get(url)
-    data = r.json().get(f"Time Series FX ({INTERVAL})", {})
-
-    if not data:
+def get_data():
+    API_KEY = "demo"  # Replace with your own Alpha Vantage key
+    URL = (
+        "https://www.alphavantage.co/query?"
+        "function=FX_INTRADAY&from_symbol=USD&to_symbol=JPY&interval=60min&outputsize=full"
+        f"&apikey={API_KEY}"
+    )
+    r = requests.get(URL)
+    raw = r.json().get("Time Series FX (60min)", {})
+    if not raw:
         return None
-
-    df = pd.DataFrame(data).T
-    df = df.rename(columns={
-        '1. open': 'open',
-        '2. high': 'high',
-        '3. low': 'low',
-        '4. close': 'close'
+    df = pd.DataFrame(raw).T.rename(columns={
+        "1. open": "open",
+        "2. high": "high",
+        "3. low": "low",
+        "4. close": "close"
     })
     df = df.astype(float)
     df.index = pd.to_datetime(df.index)
-    df.sort_index(inplace=True)
-
+    df = df.sort_index()
     return df
 
-df = get_fx_data()
+df = get_data()
+
 if df is None:
-    st.error("Failed to fetch data.")
+    st.error("Failed to fetch data. Check your API key or try again later.")
     st.stop()
 
-# ---------------------------
-# Indicator Calculation
-# ---------------------------
-df['EMA_9'] = ta.trend.ema_indicator(df['close'], window=9)
-df['EMA_21'] = ta.trend.ema_indicator(df['close'], window=21)
-df['RSI'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
+# Calculate indicators
+df["EMA_9"] = ta.trend.ema_indicator(df["close"], window=9)
+df["EMA_21"] = ta.trend.ema_indicator(df["close"], window=21)
+df["RSI"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
 
-# ---------------------------
-# Signal Generation
-# ---------------------------
+# Generate signals
 def generate_signals(df):
     signals = []
     for i in range(1, len(df)):
         row = df.iloc[i]
-        prev = df.iloc[i-1]
+        prev = df.iloc[i - 1]
 
         buy = (
-            row['EMA_9'] > row['EMA_21']
-            and row['close'] > row['EMA_9']
-            and row['RSI'] > 40 and row['RSI'] < 60 and row['RSI'] > prev['RSI']
+            row["EMA_9"] > row["EMA_21"]
+            and row["close"] > row["EMA_9"]
+            and 40 < row["RSI"] < 60
+            and row["RSI"] > prev["RSI"]
         )
 
         sell = (
-            row['EMA_9'] < row['EMA_21']
-            and row['close'] < row['EMA_9']
-            and row['RSI'] < 60 and row['RSI'] > 40 and row['RSI'] < prev['RSI']
+            row["EMA_9"] < row["EMA_21"]
+            and row["close"] < row["EMA_9"]
+            and 40 < row["RSI"] < 60
+            and row["RSI"] < prev["RSI"]
         )
 
         if buy:
@@ -79,57 +70,18 @@ def generate_signals(df):
         else:
             signals.append("Hold")
     signals.insert(0, "Hold")
-    df['Signal'] = signals
+    df["Signal"] = signals
     return df
 
 df = generate_signals(df)
 
-# ---------------------------
-# Candlestick Chart with Signals
-# ---------------------------
-fig = go.Figure()
+# Display latest signals
+st.subheader("Latest Signal")
+latest_row = df.iloc[-1]
+st.write(f"**Time:** {latest_row.name}")
+st.write(f"**Price:** {latest_row['close']:.3f}")
+st.write(f"**Signal:** {latest_row['Signal']}")
 
-fig.add_trace(go.Candlestick(
-    x=df.index,
-    open=df['open'],
-    high=df['high'],
-    low=df['low'],
-    close=df['close'],
-    name="USD/JPY"
-))
-
-fig.add_trace(go.Scatter(
-    x=df.index, y=df['EMA_9'], line=dict(color='blue', width=1), name="EMA 9"
-))
-fig.add_trace(go.Scatter(
-    x=df.index, y=df['EMA_21'], line=dict(color='orange', width=1), name="EMA 21"
-))
-
-# Signal markers
-buy_signals = df[df['Signal'] == 'Buy']
-sell_signals = df[df['Signal'] == 'Sell']
-
-fig.add_trace(go.Scatter(
-    x=buy_signals.index,
-    y=buy_signals['low'],
-    mode='markers',
-    marker=dict(color='green', size=8, symbol='arrow-up'),
-    name='Buy Signal'
-))
-
-fig.add_trace(go.Scatter(
-    x=sell_signals.index,
-    y=sell_signals['high'],
-    mode='markers',
-    marker=dict(color='red', size=8, symbol='arrow-down'),
-    name='Sell Signal'
-))
-
-fig.update_layout(height=600, xaxis_rangeslider_visible=False)
-st.plotly_chart(fig, use_container_width=True)
-
-# ---------------------------
-# RSI Line Chart
-# ---------------------------
-st.subheader("RSI (14)")
-st.line_chart(df[['RSI']])
+# Show table
+st.subheader("Recent Data")
+st.dataframe(df.tail(10)[["close", "EMA_9", "EMA_21", "RSI", "Signal"]])
