@@ -7,27 +7,31 @@ import ta
 st.title("USD/JPY Signal Generator")
 st.caption("EMA(9/21) + RSI(14) strategy (No charts)")
 
-# Fetch data from Alpha Vantage
+# Fetch data from Twelve data
 @st.cache_data(ttl=3600)
 def get_data():
-    API_KEY = "FQW8KLEVM81L7W4I"  # Replace with your own Alpha Vantage key
-    URL = (
-        "https://www.alphavantage.co/query?"
-        "function=FX_INTRADAY&from_symbol=USD&to_symbol=JPY&interval=60min&outputsize=full"
-        f"&apikey={API_KEY}"
-    )
+    API_KEY = "16e5ff0d354c4d0e9a97393a92583513" # replace this
+    SYMBOL = "USD/JPY"
+    INTERVAL = "1h"
+    URL = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&outputsize=1000&apikey={API_KEY}"
+
     r = requests.get(URL)
-    raw = r.json().get("Time Series FX (60min)", {})
-    if not raw:
+    raw = r.json()
+
+    if "values" not in raw:
+        st.write(raw)  # helpful for debugging
         return None
-    df = pd.DataFrame(raw).T.rename(columns={
-        "1. open": "open",
-        "2. high": "high",
-        "3. low": "low",
-        "4. close": "close"
+
+    df = pd.DataFrame(raw["values"])
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df.set_index("datetime", inplace=True)
+    df = df.rename(columns={
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "close": "close"
     })
     df = df.astype(float)
-    df.index = pd.to_datetime(df.index)
     df = df.sort_index()
     return df
 
