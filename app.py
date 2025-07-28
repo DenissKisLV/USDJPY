@@ -10,7 +10,7 @@ st.caption("EMA(9/21) + RSI(14) strategy (No charts)")
 # Fetch data from Alpha Vantage
 @st.cache_data(ttl=3600)
 def get_data():
-    API_KEY = "demo"  # Replace with your own Alpha Vantage key
+    API_KEY = "FQW8KLEVM81L7W4I"  # Replace with your own Alpha Vantage key
     URL = (
         "https://www.alphavantage.co/query?"
         "function=FX_INTRADAY&from_symbol=USD&to_symbol=JPY&interval=60min&outputsize=full"
