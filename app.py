@@ -106,43 +106,43 @@ else:
     df = generate_signals(df)
 st.subheader("Latest Signal")
 
-    latest_time = df.index[-1]
-    latest = df.iloc[-1]
+latest_time = df.index[-1]
+latest = df.iloc[-1]
 
-    st.metric("Signal", latest["Signal"])
-    st.write(f"📅 Datetime: {latest_time}")
-    st.write(f"📈 EMA-9: {latest['EMA_9']:.3f}, EMA-21: {latest['EMA_21']:.3f}")
-    st.write(f"📉 RSI: {latest['RSI']:.2f}")
+st.metric("Signal", latest["Signal"])
+st.write(f"📅 Datetime: {latest_time}")
+st.write(f"📈 EMA-9: {latest['EMA_9']:.3f}, EMA-21: {latest['EMA_21']:.3f}")
+st.write(f"📉 RSI: {latest['RSI']:.2f}")
 
     # 🟢 Show all Buy/Sell signals
-    st.subheader("📋 Buy/Sell Signal List")
-    signal_df = df[df["Signal"].isin(["Buy", "Sell"])][["Signal", "close"]]
-    signal_df["Datetime"] = signal_df.index
-    signal_df = signal_df[["Datetime", "Signal", "close"]]
-    signal_df = signal_df.rename(columns={"close": "Price"})
-    st.dataframe(signal_df, use_container_width=True)
+st.subheader("📋 Buy/Sell Signal List")
+signal_df = df[df["Signal"].isin(["Buy", "Sell"])][["Signal", "close"]]
+signal_df["Datetime"] = signal_df.index
+signal_df = signal_df[["Datetime", "Signal", "close"]]
+signal_df = signal_df.rename(columns={"close": "Price"})
+st.dataframe(signal_df, use_container_width=True)
 
     # 🔁 Backtest Results
-    st.subheader("📈 Simulated Trades")
+st.subheader("📈 Simulated Trades")
 
-    results = backtest(df)
+results = backtest(df)
 
-    if results.empty:
-        st.info("No trades triggered.")
-    else:
+if results.empty:
+    st.info("No trades triggered.")
+else:
         # Rearranged detailed columns
-        results["Units"] = results["Invested (€)"] / results["Entry Price"]
-        results["EUR Acquired"] = results["Invested (€)"] + results["Profit/Loss (€)"]
+    results["Units"] = results["Invested (€)"] / results["Entry Price"]
+    results["EUR Acquired"] = results["Invested (€)"] + results["Profit/Loss (€)"]
 
-        trade_log = results[[
-            "Entry Time", "Entry Price", "Units", "Invested (€)",
-            "Exit Time", "Exit Price", "EUR Acquired",
-            "Profit/Loss (€)", "Profit/Loss (%)"
-        ]].copy()
+    trade_log = results[[
+        "Entry Time", "Entry Price", "Units", "Invested (€)",
+        "Exit Time", "Exit Price", "EUR Acquired",
+        "Profit/Loss (€)", "Profit/Loss (%)"
+    ]].copy()
 
-        st.dataframe(trade_log, use_container_width=True)
+    st.dataframe(trade_log, use_container_width=True)
 
         # Download CSV
-        csv = trade_log.to_csv(index=False).encode("utf-8")
-        st.download_button("📁 Download Trade Log (CSV)", csv, "usd_jpy_trades.csv", "text/csv")
+    csv = trade_log.to_csv(index=False).encode("utf-8")
+    st.download_button("📁 Download Trade Log (CSV)", csv, "usd_jpy_trades.csv", "text/csv")
     
