@@ -1,92 +1,110 @@
 import streamlit as st
 import pandas as pd
 import requests
-from ta.trend import EMAIndicator
-from ta.momentum import RSIIndicator
+import ta
 
-# ===================== CONFIG =====================
-API_KEY = "16e5ff0d354c4d0e9a97393a92583513"  # Replace with your Twelve Data key
-SYMBOL = "USD/JPY"
-INTERVAL = "1h"
-FEE_RATE = 0.0003  # 0.03% fee per trade (round trip)
-# ===================================================
+st.set_page_config(layout="wide")
+st.title("USD/JPY Signal Generator and Backtester (Twelve Data)")
 
-st.title("USD/JPY Signal & Backtest Simulator")
+API_KEY = "16e5ff0d354c4d0e9a97393a92583513"
 
-@st.cache_data(ttl=3600)
-def get_data():
-    url = f"https://api.twelvedata.com/time_series?symbol={SYMBOL}&interval={INTERVAL}&outputsize=5000&apikey={API_KEY}"
+@st.cache_data
+def fetch_data():
+    symbol = "USD/JPY"
+    interval = "1h"
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=5000&apikey={API_KEY}"
+    
     r = requests.get(url)
-    raw = r.json()
+    data = r.json()
 
-    if "values" not in raw:
+    try:
+        df = pd.DataFrame(data["values"])
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df.set_index("datetime", inplace=True)
+        df = df.sort_index()
+        df = df.astype(float)
+        return df
+    except Exception as e:
+        print("Fetch error:", e)
         return None
 
-    df = pd.DataFrame(raw["values"])
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    df.set_index("datetime", inplace=True)
-    df = df.rename(columns={
-        "open": "open",
-        "high": "high",
-        "low": "low",
-        "close": "close"
-    })
-    df = df.astype(float)
-    df = df.sort_index()
-    return df
-
 def generate_signals(df):
-    df["EMA_9"] = EMAIndicator(df["close"], window=9).ema_indicator()
-    df["EMA_21"] = EMAIndicator(df["close"], window=21).ema_indicator()
-    df["RSI"] = RSIIndicator(df["close"], window=14).rsi()
-    
+    df["EMA_9"] = ta.trend.ema_indicator(df["close"], window=9)
+    df["EMA_21"] = ta.trend.ema_indicator(df["close"], window=21)
+    df["RSI"] = ta.momentum.rsi(df["close"], window=14)
+
     df["Signal"] = "Hold"
-    df.loc[(df["EMA_9"] > df["EMA_21"]) & (df["RSI"] < 70), "Signal"] = "Buy"
-    df.loc[(df["EMA_9"] < df["EMA_21"]) & (df["RSI"] > 30), "Signal"] = "Sell"
+    df["Prev_EMA_9"] = df["EMA_9"].shift(1)
+    df["Prev_EMA_21"] = df["EMA_21"].shift(1)
+
+    for i in range(1, len(df)):
+        if (
+            df["Prev_EMA_9"].iloc[i] < df["Prev_EMA_21"].iloc[i]
+            and df["EMA_9"].iloc[i] > df["EMA_21"].iloc[i]
+            and df["RSI"].iloc[i] < 70
+        ):
+            df.at[df.index[i], "Signal"] = "Buy"
+        elif (
+            df["Prev_EMA_9"].iloc[i] > df["Prev_EMA_21"].iloc[i]
+            and df["EMA_9"].iloc[i] < df["EMA_21"].iloc[i]
+            and df["RSI"].iloc[i] > 30
+        ):
+            df.at[df.index[i], "Signal"] = "Sell"
+
+    # Restrict to one signal per day
+    df["Date"] = df.index.date
+    df["Signal_Rank"] = df.groupby("Date")["Signal"].transform(
+        lambda x: (x != "Hold").cumsum()
+    )
+    df = df[df["Signal_Rank"] <= 1]
+    df = df.drop(columns=["Date", "Signal_Rank", "Prev_EMA_9", "Prev_EMA_21"])
+
     return df
 
 def backtest(df):
     initial_capital = 50000
     max_position_pct = 0.05
-    trade_fee_pct = 0.001  # 0.1%
-
-    position = None
-    entry_price = 0
-    entry_time = None
+    fee_pct = 0.001  # 0.1% total fee
     capital = initial_capital
+    position = None
     results = []
     last_trade_date = None
 
     for i in range(len(df)):
         row = df.iloc[i]
-        current_date = row.name.date()
         price = row["close"]
         signal = row["Signal"]
+        current_date = row.name.date()
 
+        # Signal
         if signal in ["Buy", "Sell"]:
-            # Restrict to one trade per day
             if last_trade_date == current_date:
                 continue
 
+            capital_allocated = capital * max_position_pct
+            units = capital_allocated / price
+            entry_price = price
+            entry_time = row.name
+
             position = {
                 "type": signal,
-                "entry_price": price,
-                "entry_time": row.name,
-                "capital_allocated": capital * max_position_pct,
-                "units": (capital * max_position_pct) / price,
+                "entry_price": entry_price,
+                "entry_time": entry_time,
+                "capital_allocated": capital_allocated,
+                "units": units,
             }
             last_trade_date = current_date
             continue
 
+        # Exit
         if position:
-            # Check exit conditions
             change = (price - position["entry_price"]) / position["entry_price"]
             if position["type"] == "Sell":
-                change = -change  # Invert for short
+                change = -change
 
             if change >= 0.06 or change <= -0.02:
                 gross_return = position["capital_allocated"] * (1 + change)
-                fee = (position["capital_allocated"] + gross_return) * trade_fee_pct
+                fee = (position["capital_allocated"] + gross_return) * fee_pct
                 net_return = gross_return - fee
                 profit = net_return - position["capital_allocated"]
                 pct_return = (profit / position["capital_allocated"]) * 100
@@ -102,55 +120,52 @@ def backtest(df):
                 position = None
 
     return pd.DataFrame(results)
-# ========== RUN APP ==========
-with st.spinner("Fetching USD/JPY data..."):
-    df = get_data()
+
+# ========== Streamlit App ==========
+
+df = fetch_data()
 
 if df is None:
-    st.error("Failed to fetch data. Check API key or try again later.")
+    st.error("❌ Failed to fetch data. Check API key or server status.")
 else:
     df = generate_signals(df)
-st.subheader("Latest Signal")
 
-latest_time = df.index[-1]
-latest = df.iloc[-1]
+    st.subheader("Latest Signal")
+    latest_time = df.index[-1]
+    latest = df.iloc[-1]
+    st.metric("Signal", latest["Signal"])
+    st.write(f"🕒 Timestamp: {latest_time}")
+    st.write(f"EMA-9: {latest['EMA_9']:.3f}, EMA-21: {latest['EMA_21']:.3f}")
+    st.write(f"RSI: {latest['RSI']:.2f}")
 
-st.metric("Signal", latest["Signal"])
-st.write(f"📅 Datetime: {latest_time}")
-st.write(f"📈 EMA-9: {latest['EMA_9']:.3f}, EMA-21: {latest['EMA_21']:.3f}")
-st.write(f"📉 RSI: {latest['RSI']:.2f}")
+    # Show signals (max 1/day)
+    st.subheader("📋 Signal List (1 per day)")
+    signals = df[df["Signal"].isin(["Buy", "Sell"])]
+    signal_list = signals[["Signal", "close"]].copy()
+    signal_list["Timestamp"] = signals.index
+    signal_list.rename(columns={"close": "Price"}, inplace=True)
+    st.dataframe(signal_list[["Timestamp", "Signal", "Price"]], use_container_width=True)
 
-    # 🟢 Show all Buy/Sell signals
-st.subheader("📋 Buy/Sell Signal List")
-signal_df = df[df["Signal"].isin(["Buy", "Sell"])][["Signal", "close"]]
-signal_df["Datetime"] = signal_df.index
-signal_df = signal_df[["Datetime", "Signal", "close"]]
-signal_df = signal_df.rename(columns={"close": "Price"})
-st.dataframe(signal_df, use_container_width=True)
+    # Backtest
+    st.subheader("📈 Backtest Results")
+    results = backtest(df)
 
-    # 🔁 Backtest Results
-st.subheader("📈 Simulated Trades")
-
-results = backtest(df)
-
-if results.empty:
-        st.info("No trades triggered.")
+    if results.empty:
+        st.info("No trades executed during this period.")
     else:
-        # Calculate days held
-        results["Days Held"] = (pd.to_datetime(results["Exit Time"]) - pd.to_datetime(results["Entry Time"])).dt.days
+        results["Days Held"] = (
+            pd.to_datetime(results["Exit Time"]) - pd.to_datetime(results["Entry Time"])
+        ).dt.days
 
-        # Prepare summary table
         summary_df = results[[
             "Entry Time", "Exit Time", "Days Held", "Profit/Loss (%)"
-        ]].copy()
-
+        ]]
         st.dataframe(summary_df, use_container_width=True)
 
-        # Capital and average return
         initial_capital = 50000
         final_capital = initial_capital + results["Profit/Loss (€)"].sum()
-        average_return = results["Profit/Loss (%)"].mean()
+        avg_return = results["Profit/Loss (%)"].mean()
 
         st.markdown(f"**💰 Initial Capital:** €{initial_capital:,.2f}")
         st.markdown(f"**🏁 Final Capital:** €{final_capital:,.2f}")
-        st.markdown(f"**📊 Average Trade Return:** {average_return:.2f}%")
+        st.markdown(f"**📊 Average Trade Return:** {avg_return:.2f}%")
