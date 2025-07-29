@@ -3,31 +3,47 @@ import pandas as pd
 import yfinance as yf
 import ta
 
-st.set_page_config(layout="wide")
+# App title
 st.title("USD/JPY Signal Generator and Backtester (Yahoo Finance)")
 
+# Initial capital and config
+initial_capital = 50000
+position_size_pct = 0.05
+take_profit = 0.06
+stop_loss = 0.02
+fee_rate = 0.001  # 0.1%
+
+# Fetch data
 @st.cache_data
 def fetch_data():
     symbol = "JPY=X"
     df = yf.download(symbol, period="5y", interval="1d")
-    if df.empty or "Close" not in df.columns:
+
+    if df.empty:
+        st.error("Downloaded data is empty.")
         return None
+
+    # Fallback to Adj Close
+    if "Close" not in df.columns:
+        if "Adj Close" in df.columns:
+            df["Close"] = df["Adj Close"]
+        else:
+            st.error("No Close or Adj Close column found.")
+            return None
+
     df = df.dropna(subset=["Close"])
     df.index = pd.to_datetime(df.index)
     return df
 
 
+# Generate Buy/Sell signals
 def generate_signals(df):
     df = df.copy()
-
-    # Ensure 'Close' is clean
     df = df.dropna(subset=["Close"])
 
-    # Apply indicators safely
-    close = df["Close"]
-    df["EMA_9"] = ta.trend.ema_indicator(close, window=9)
-    df["EMA_21"] = ta.trend.ema_indicator(close, window=21)
-    df["RSI"] = ta.momentum.rsi(close, window=14)
+    df["EMA_9"] = ta.trend.ema_indicator(df["Close"], window=9)
+    df["EMA_21"] = ta.trend.ema_indicator(df["Close"], window=21)
+    df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
 
     df["Signal"] = "Hold"
     df["Prev_EMA_9"] = df["EMA_9"].shift(1)
@@ -47,118 +63,81 @@ def generate_signals(df):
         ):
             df.at[df.index[i], "Signal"] = "Sell"
 
-    # Only one signal per day
-    df["Date"] = df.index.date
-    df["Signal_Rank"] = df.groupby("Date")["Signal"].transform(
-        lambda x: (x != "Hold").cumsum()
-    )
-    df = df[df["Signal_Rank"] <= 1]
-    df = df.drop(columns=["Date", "Signal_Rank", "Prev_EMA_9", "Prev_EMA_21"])
+    # Limit to one signal per day
+    df["Signal_Rank"] = df["Signal"].ne("Hold").groupby(df.index.date).cumsum()
+    df = df[(df["Signal"] != "Hold") & (df["Signal_Rank"] == 1)]
+    df.drop(columns=["Prev_EMA_9", "Prev_EMA_21", "Signal_Rank"], inplace=True)
 
     return df
 
-def backtest(df):
-    initial_capital = 50000
-    max_position_pct = 0.05
-    fee_pct = 0.001  # 0.1% total round-trip fee
+
+# Simulate trading
+def simulate_trades(df):
     capital = initial_capital
-    position = None
-    results = []
+    trades = []
     last_trade_date = None
 
     for i in range(len(df)):
         row = df.iloc[i]
+        signal_date = df.index[i].date()
         price = row["Close"]
-        signal = row["Signal"]
-        current_date = row.name.date()
 
-        # Entry
-        if signal in ["Buy", "Sell"]:
-            if last_trade_date == current_date:
-                continue  # only one trade per day
-            capital_allocated = capital * max_position_pct
-            units = capital_allocated / price
-            entry_price = price
-            entry_time = row.name
-            position = {
-                "type": signal,
-                "entry_price": entry_price,
-                "entry_time": entry_time,
-                "capital_allocated": capital_allocated,
-                "units": units,
-            }
-            last_trade_date = current_date
+        # Only one trade per day
+        if signal_date == last_trade_date:
             continue
+        last_trade_date = signal_date
 
-        # Exit
-        if position:
-            change = (price - position["entry_price"]) / position["entry_price"]
-            if position["type"] == "Sell":
-                change = -change
-            if change >= 0.06 or change <= -0.02:
-                gross_return = position["capital_allocated"] * (1 + change)
-                fee = (position["capital_allocated"] + gross_return) * fee_pct
-                net_return = gross_return - fee
-                profit = net_return - position["capital_allocated"]
-                pct_return = (profit / position["capital_allocated"]) * 100
+        position_type = row["Signal"]
+        volume = (capital * position_size_pct) / price
+        entry_price = price
+        entry_time = df.index[i]
 
-                results.append({
-                    "Entry Time": position["entry_time"],
-                    "Exit Time": row.name,
-                    "Profit/Loss (€)": profit,
-                    "Profit/Loss (%)": pct_return
+        # Search for exit
+        for j in range(i + 1, len(df)):
+            exit_price = df["Close"].iloc[j]
+            change = (exit_price - entry_price) / entry_price
+            if position_type == "Sell":
+                change = -change  # inverse for shorts
+
+            if change >= take_profit or change <= -stop_loss:
+                exit_time = df.index[j]
+                gross_return = change
+                pnl = volume * entry_price * gross_return
+                fees = (volume * entry_price + volume * exit_price) * fee_rate
+                net_pnl = pnl - fees
+                capital += net_pnl
+
+                trades.append({
+                    "Entry Time": entry_time,
+                    "Exit Time": exit_time,
+                    "Days Held": (exit_time - entry_time).days,
+                    "Return %": round(gross_return * 100, 2),
                 })
+                break
 
-                capital += profit
-                position = None
+    return trades, capital
 
-    return pd.DataFrame(results)
 
-# ========== Streamlit Interface ==========
-
+# Run the app
 df = fetch_data()
-
-if df is None or df.empty:
-    st.error("❌ Failed to fetch data.")
-else:
-    df = generate_signals(df)
-
+if df is not None:
+    signal_df = generate_signals(df)
     st.subheader("Latest Signal")
-    latest_time = df.index[-1]
-    latest = df.iloc[-1]
-    st.metric("Signal", latest["Signal"])
-    st.write(f"🕒 Timestamp: {latest_time}")
-    st.write(f"EMA-9: {latest['EMA_9']:.3f}, EMA-21: {latest['EMA_21']:.3f}")
-    st.write(f"RSI: {latest['RSI']:.2f}")
+    if not signal_df.empty:
+        st.write(signal_df.iloc[-1][["Signal", "Close", "RSI"]])
 
-    # Signal Table (1 per day)
-    st.subheader("📋 Signal List (Max 1/day)")
-    signals = df[df["Signal"].isin(["Buy", "Sell"])]
-    signal_list = signals[["Signal", "Close"]].copy()
-    signal_list["Timestamp"] = signals.index
-    signal_list.rename(columns={"Close": "Price"}, inplace=True)
-    st.dataframe(signal_list[["Timestamp", "Signal", "Price"]], use_container_width=True)
+    st.subheader("Signal List (Buy/Sell Only)")
+    st.dataframe(signal_df[["Signal", "Close"]].rename(columns={"Close": "Price"}))
 
-    # Backtest Results
-    st.subheader("📈 Backtest Results")
-    results = backtest(df)
+    st.subheader("Backtest Results")
+    trades, final_capital = simulate_trades(signal_df)
+    trade_df = pd.DataFrame(trades)
 
-    if results.empty:
-        st.info("No trades executed during this period.")
+    if not trade_df.empty:
+        avg_return = trade_df["Return %"].mean().round(2)
+        st.dataframe(trade_df)
+        st.markdown(f"**Initial Capital:** €{initial_capital:,.2f}")
+        st.markdown(f"**Final Capital:** €{final_capital:,.2f}")
+        st.markdown(f"**Average Return per Trade:** {avg_return:.2f}%")
     else:
-        results["Days Held"] = (
-            pd.to_datetime(results["Exit Time"]) - pd.to_datetime(results["Entry Time"])
-        ).dt.days
-
-        summary_df = results[[
-            "Entry Time", "Exit Time", "Days Held", "Profit/Loss (%)"
-        ]]
-        st.dataframe(summary_df, use_container_width=True)
-
-        initial_capital = 50000
-        final_capital = initial_capital + results["Profit/Loss (€)"].sum()
-        avg_return = results["Profit/Loss (%)"].mean()
-
-        st.markdown(f"**💰 Initial Capital:** €{initial_capital:,.2f}")
-        st.markdown(f"**🏁 Final Capital:** €{final_capital:,.2f}")
-        st.markdown(f"**📊 Average Trade Return:** {avg_return:.2f}%")
+        st.write("No trades were triggered based on the signals.")
