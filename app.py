@@ -20,8 +20,13 @@ def fetch_data():
         st.error("Downloaded data is empty.")
         return None
 
-    # If Close is missing, fallback to Adj Close
-    if "Close" not in df.columns or df["Close"].isna().all():
+    # Check for Close and handle fallback safely
+    if "Close" in df.columns:
+        close_is_null = df["Close"].isna().all()
+    else:
+        close_is_null = True
+
+    if close_is_null:
         if "Adj Close" in df.columns and not df["Adj Close"].isna().all():
             df["Close"] = df["Adj Close"]
         else:
