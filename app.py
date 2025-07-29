@@ -20,7 +20,7 @@ def fetch_data():
         st.error("Downloaded data is empty.")
         return None
 
-    # Check for Close and handle fallback safely
+    # Handle missing or empty Close
     if "Close" in df.columns:
         close_is_null = df["Close"].isna().all()
     else:
