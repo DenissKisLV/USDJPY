@@ -3,17 +3,14 @@ import pandas as pd
 import yfinance as yf
 import ta
 
-# App title
 st.title("USD/JPY Signal Generator and Backtester (Yahoo Finance)")
 
-# Initial capital and config
 initial_capital = 50000
 position_size_pct = 0.05
 take_profit = 0.06
 stop_loss = 0.02
-fee_rate = 0.001  # 0.1%
+fee_rate = 0.001  # 0.1% round trip fee
 
-# Fetch data
 @st.cache_data
 def fetch_data():
     symbol = "JPY=X"
@@ -23,24 +20,20 @@ def fetch_data():
         st.error("Downloaded data is empty.")
         return None
 
-    # Fallback to Adj Close
-    if "Close" not in df.columns:
-        if "Adj Close" in df.columns:
+    # If Close is missing, fallback to Adj Close
+    if "Close" not in df.columns or df["Close"].isna().all():
+        if "Adj Close" in df.columns and not df["Adj Close"].isna().all():
             df["Close"] = df["Adj Close"]
         else:
-            st.error("No Close or Adj Close column found.")
+            st.error("Neither Close nor Adj Close available.")
             return None
 
     df = df.dropna(subset=["Close"])
     df.index = pd.to_datetime(df.index)
     return df
 
-
-# Generate Buy/Sell signals
 def generate_signals(df):
     df = df.copy()
-    df = df.dropna(subset=["Close"])
-
     df["EMA_9"] = ta.trend.ema_indicator(df["Close"], window=9)
     df["EMA_21"] = ta.trend.ema_indicator(df["Close"], window=21)
     df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
@@ -63,15 +56,13 @@ def generate_signals(df):
         ):
             df.at[df.index[i], "Signal"] = "Sell"
 
-    # Limit to one signal per day
+    # One signal per day
     df["Signal_Rank"] = df["Signal"].ne("Hold").groupby(df.index.date).cumsum()
     df = df[(df["Signal"] != "Hold") & (df["Signal_Rank"] == 1)]
     df.drop(columns=["Prev_EMA_9", "Prev_EMA_21", "Signal_Rank"], inplace=True)
 
     return df
 
-
-# Simulate trading
 def simulate_trades(df):
     capital = initial_capital
     trades = []
@@ -82,7 +73,6 @@ def simulate_trades(df):
         signal_date = df.index[i].date()
         price = row["Close"]
 
-        # Only one trade per day
         if signal_date == last_trade_date:
             continue
         last_trade_date = signal_date
@@ -92,12 +82,11 @@ def simulate_trades(df):
         entry_price = price
         entry_time = df.index[i]
 
-        # Search for exit
         for j in range(i + 1, len(df)):
             exit_price = df["Close"].iloc[j]
             change = (exit_price - entry_price) / entry_price
             if position_type == "Sell":
-                change = -change  # inverse for shorts
+                change = -change
 
             if change >= take_profit or change <= -stop_loss:
                 exit_time = df.index[j]
@@ -117,8 +106,6 @@ def simulate_trades(df):
 
     return trades, capital
 
-
-# Run the app
 df = fetch_data()
 if df is not None:
     signal_df = generate_signals(df)
