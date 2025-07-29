@@ -1,37 +1,22 @@
 import streamlit as st
 import pandas as pd
-import requests
+import yfinance as yf
 import ta
 
 st.set_page_config(layout="wide")
-st.title("USD/JPY Signal Generator and Backtester (Twelve Data)")
-
-API_KEY = "16e5ff0d354c4d0e9a97393a92583513"
+st.title("USD/JPY Signal Generator and Backtester (Yahoo Finance)")
 
 @st.cache_data
 def fetch_data():
-    symbol = "USD/JPY"
-    interval = "1h"
-    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&outputsize=5000&apikey={API_KEY}"
-    
-    r = requests.get(url)
-    data = r.json()
-
-    try:
-        df = pd.DataFrame(data["values"])
-        df["datetime"] = pd.to_datetime(df["datetime"])
-        df.set_index("datetime", inplace=True)
-        df = df.sort_index()
-        df = df.astype(float)
-        return df
-    except Exception as e:
-        print("Fetch error:", e)
-        return None
+    symbol = "JPY=X"  # Yahoo Finance symbol for USD/JPY
+    df = yf.download(symbol, period="5y", interval="1h")  # 5 years of hourly data
+    df.index = pd.to_datetime(df.index)
+    return df
 
 def generate_signals(df):
-    df["EMA_9"] = ta.trend.ema_indicator(df["close"], window=9)
-    df["EMA_21"] = ta.trend.ema_indicator(df["close"], window=21)
-    df["RSI"] = ta.momentum.rsi(df["close"], window=14)
+    df["EMA_9"] = ta.trend.ema_indicator(df["Close"], window=9)
+    df["EMA_21"] = ta.trend.ema_indicator(df["Close"], window=21)
+    df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
 
     df["Signal"] = "Hold"
     df["Prev_EMA_9"] = df["EMA_9"].shift(1)
@@ -51,7 +36,7 @@ def generate_signals(df):
         ):
             df.at[df.index[i], "Signal"] = "Sell"
 
-    # Restrict to one signal per day
+    # Restrict to 1 signal per day
     df["Date"] = df.index.date
     df["Signal_Rank"] = df.groupby("Date")["Signal"].transform(
         lambda x: (x != "Hold").cumsum()
@@ -64,7 +49,7 @@ def generate_signals(df):
 def backtest(df):
     initial_capital = 50000
     max_position_pct = 0.05
-    fee_pct = 0.001  # 0.1% total fee
+    fee_pct = 0.001  # 0.1% total round-trip fee
     capital = initial_capital
     position = None
     results = []
@@ -72,20 +57,18 @@ def backtest(df):
 
     for i in range(len(df)):
         row = df.iloc[i]
-        price = row["close"]
+        price = row["Close"]
         signal = row["Signal"]
         current_date = row.name.date()
 
-        # Signal
+        # Entry
         if signal in ["Buy", "Sell"]:
             if last_trade_date == current_date:
-                continue
-
+                continue  # only one trade per day
             capital_allocated = capital * max_position_pct
             units = capital_allocated / price
             entry_price = price
             entry_time = row.name
-
             position = {
                 "type": signal,
                 "entry_price": entry_price,
@@ -101,7 +84,6 @@ def backtest(df):
             change = (price - position["entry_price"]) / position["entry_price"]
             if position["type"] == "Sell":
                 change = -change
-
             if change >= 0.06 or change <= -0.02:
                 gross_return = position["capital_allocated"] * (1 + change)
                 fee = (position["capital_allocated"] + gross_return) * fee_pct
@@ -121,12 +103,12 @@ def backtest(df):
 
     return pd.DataFrame(results)
 
-# ========== Streamlit App ==========
+# ========== Streamlit Interface ==========
 
 df = fetch_data()
 
-if df is None:
-    st.error("❌ Failed to fetch data. Check API key or server status.")
+if df is None or df.empty:
+    st.error("❌ Failed to fetch data.")
 else:
     df = generate_signals(df)
 
@@ -138,15 +120,15 @@ else:
     st.write(f"EMA-9: {latest['EMA_9']:.3f}, EMA-21: {latest['EMA_21']:.3f}")
     st.write(f"RSI: {latest['RSI']:.2f}")
 
-    # Show signals (max 1/day)
-    st.subheader("📋 Signal List (1 per day)")
+    # Signal Table (1 per day)
+    st.subheader("📋 Signal List (Max 1/day)")
     signals = df[df["Signal"].isin(["Buy", "Sell"])]
-    signal_list = signals[["Signal", "close"]].copy()
+    signal_list = signals[["Signal", "Close"]].copy()
     signal_list["Timestamp"] = signals.index
-    signal_list.rename(columns={"close": "Price"}, inplace=True)
+    signal_list.rename(columns={"Close": "Price"}, inplace=True)
     st.dataframe(signal_list[["Timestamp", "Signal", "Price"]], use_container_width=True)
 
-    # Backtest
+    # Backtest Results
     st.subheader("📈 Backtest Results")
     results = backtest(df)
 
