@@ -45,57 +45,63 @@ def generate_signals(df):
     df.loc[(df["EMA_9"] < df["EMA_21"]) & (df["RSI"] > 30), "Signal"] = "Sell"
     return df
 
-def backtest(df, initial_capital=50000, position_size_pct=0.05, tp=0.06, sl=0.02, fee_rate=FEE_RATE):
+def backtest(df):
+    initial_capital = 50000
+    max_position_pct = 0.05
+    trade_fee_pct = 0.001  # 0.1%
+
+    position = None
+    entry_price = 0
+    entry_time = None
     capital = initial_capital
-    in_position = False
-    position_type = None
-    trades = []
+    results = []
+    last_trade_date = None
 
     for i in range(len(df)):
         row = df.iloc[i]
+        current_date = row.name.date()
+        price = row["close"]
+        signal = row["Signal"]
 
-        if row["Signal"] in ["Buy", "Sell"] and not in_position:
-            entry_time = row.name
-            entry_price = row["close"]
-            direction = 1 if row["Signal"] == "Buy" else -1
-            investment = capital * position_size_pct
-            units = investment / entry_price
-            in_position = True
-            position_type = row["Signal"]
+        if signal in ["Buy", "Sell"]:
+            # Restrict to one trade per day
+            if last_trade_date == current_date:
+                continue
 
-            for j in range(i + 1, len(df)):
-                next_row = df.iloc[j]
-                price_change = (next_row["close"] - entry_price) / entry_price * direction
+            position = {
+                "type": signal,
+                "entry_price": price,
+                "entry_time": row.name,
+                "capital_allocated": capital * max_position_pct,
+                "units": (capital * max_position_pct) / price,
+            }
+            last_trade_date = current_date
+            continue
 
-                if price_change >= tp or price_change <= -sl:
-                    exit_time = next_row.name
-                    exit_price = next_row["close"]
-                    gross_pnl = (exit_price - entry_price) * units * direction
-                    fee = investment * fee_rate
-                    net_pnl = gross_pnl - fee
-                    pct_change = (net_pnl / investment) * 100
+        if position:
+            # Check exit conditions
+            change = (price - position["entry_price"]) / position["entry_price"]
+            if position["type"] == "Sell":
+                change = -change  # Invert for short
 
-                    trades.append({
-                        "Entry Time": entry_time,
-                        "Exit Time": exit_time,
-                        "Position": position_type,
-                        "Entry Price": round(entry_price, 3),
-                        "Exit Price": round(exit_price, 3),
-                        "EMA_9": round(row["EMA_9"], 3),
-                        "EMA_21": round(row["EMA_21"], 3),
-                        "RSI": round(row["RSI"], 2),
-                        "Invested (€)": round(investment, 2),
-                        "Profit/Loss (€)": round(net_pnl, 2),
-                        "Profit/Loss (%)": round(pct_change, 2),
-                        "Fee (€)": round(fee, 2)
-                    })
+            if change >= 0.06 or change <= -0.02:
+                gross_return = position["capital_allocated"] * (1 + change)
+                fee = (position["capital_allocated"] + gross_return) * trade_fee_pct
+                net_return = gross_return - fee
+                profit = net_return - position["capital_allocated"]
+                pct_return = (profit / position["capital_allocated"]) * 100
 
-                    capital += net_pnl
-                    in_position = False
-                    break
+                results.append({
+                    "Entry Time": position["entry_time"],
+                    "Exit Time": row.name,
+                    "Profit/Loss (€)": profit,
+                    "Profit/Loss (%)": pct_return
+                })
 
-    return pd.DataFrame(trades)
+                capital += profit
+                position = None
 
+    return pd.DataFrame(results)
 # ========== RUN APP ==========
 with st.spinner("Fetching USD/JPY data..."):
     df = get_data()
@@ -128,22 +134,22 @@ st.subheader("📈 Simulated Trades")
 results = backtest(df)
 
 if results.empty:
-    st.info("No trades triggered.")
-else:
-        # Calculate days held
-    results["Days Held"] = (pd.to_datetime(results["Exit Time"]) - pd.to_datetime(results["Entry Time"])).dt.days
+        st.info("No trades triggered.")
+    else:
+        # Days held
+        results["Days Held"] = (pd.to_datetime(results["Exit Time"]) - pd.to_datetime(results["Entry Time"])).dt.days
 
-        # Summarized trade view
-    summary_df = results[[
-        "Entry Time", "Exit Time", "Days Held", "Profit/Loss (%)"
-    ]].copy()
+        summary_df = results[[
+            "Entry Time", "Exit Time", "Days Held", "Profit/Loss (%)"
+        ]].copy()
 
-        # Display simplified table
-    st.dataframe(summary_df, use_container_width=True)
+        st.dataframe(summary_df, use_container_width=True)
 
-        # Calculate final capital
-    initial_capital = 50000
-    final_capital = initial_capital + results["Profit/Loss (€)"].sum()
+        # Capital summary
+        initial_capital = 50000
+        final_capital = initial_capital + results["Profit/Loss (€)"].sum()
+        average_return = results["Profit/Loss (%)"].mean()
 
-    st.markdown(f"**💰 Initial Capital:** €{initial_capital:,.2f}")
-    st.markdown(f"**🏁 Final Capital:** €{final_capital:,.2f}")
+        st.markdown(f"**💰 Initial Capital:** €{initial_capital:,.2f}")
+        st.markdown(f"**🏁 Final Capital:** €{final_capital:,.2f}")
+        st.markdown(f"**📊 Average Trade Return:** {average_return:.2f}%")
