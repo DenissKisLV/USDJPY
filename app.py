@@ -130,19 +130,20 @@ results = backtest(df)
 if results.empty:
     st.info("No trades triggered.")
 else:
-        # Rearranged detailed columns
-    results["Units"] = results["Invested (€)"] / results["Entry Price"]
-    results["EUR Acquired"] = results["Invested (€)"] + results["Profit/Loss (€)"]
+        # Calculate days held
+    results["Days Held"] = (pd.to_datetime(results["Exit Time"]) - pd.to_datetime(results["Entry Time"])).dt.days
 
-    trade_log = results[[
-        "Entry Time", "Entry Price", "Units", "Invested (€)",
-        "Exit Time", "Exit Price", "EUR Acquired",
-        "Profit/Loss (€)", "Profit/Loss (%)"
+        # Summarized trade view
+    summary_df = results[[
+        "Entry Time", "Exit Time", "Days Held", "Profit/Loss (%)"
     ]].copy()
 
-    st.dataframe(trade_log, use_container_width=True)
+        # Display simplified table
+    st.dataframe(summary_df, use_container_width=True)
 
-        # Download CSV
-    csv = trade_log.to_csv(index=False).encode("utf-8")
-    st.download_button("📁 Download Trade Log (CSV)", csv, "usd_jpy_trades.csv", "text/csv")
-    
+        # Calculate final capital
+    initial_capital = 50000
+    final_capital = initial_capital + results["Profit/Loss (€)"].sum()
+
+    st.markdown(f"**💰 Initial Capital:** €{initial_capital:,.2f}")
+    st.markdown(f"**🏁 Final Capital:** €{final_capital:,.2f}")
