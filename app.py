@@ -136,16 +136,17 @@ results = backtest(df)
 if results.empty:
         st.info("No trades triggered.")
     else:
-        # Days held
+        # Calculate days held
         results["Days Held"] = (pd.to_datetime(results["Exit Time"]) - pd.to_datetime(results["Entry Time"])).dt.days
 
+        # Prepare summary table
         summary_df = results[[
             "Entry Time", "Exit Time", "Days Held", "Profit/Loss (%)"
         ]].copy()
 
         st.dataframe(summary_df, use_container_width=True)
 
-        # Capital summary
+        # Capital and average return
         initial_capital = 50000
         final_capital = initial_capital + results["Profit/Loss (€)"].sum()
         average_return = results["Profit/Loss (%)"].mean()
