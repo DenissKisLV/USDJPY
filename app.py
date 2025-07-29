@@ -8,15 +8,26 @@ st.title("USD/JPY Signal Generator and Backtester (Yahoo Finance)")
 
 @st.cache_data
 def fetch_data():
-    symbol = "JPY=X"  # Yahoo Finance symbol for USD/JPY
-    df = yf.download(symbol, period="5y", interval="1d")  # 5 years of hourly data
+    symbol = "JPY=X"
+    df = yf.download(symbol, period="5y", interval="1d")
+    if df.empty or "Close" not in df.columns:
+        return None
+    df = df.dropna(subset=["Close"])
     df.index = pd.to_datetime(df.index)
     return df
 
+
 def generate_signals(df):
-    df["EMA_9"] = ta.trend.ema_indicator(df["Close"], window=9)
-    df["EMA_21"] = ta.trend.ema_indicator(df["Close"], window=21)
-    df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
+    df = df.copy()
+
+    # Ensure 'Close' is clean
+    df = df.dropna(subset=["Close"])
+
+    # Apply indicators safely
+    close = df["Close"]
+    df["EMA_9"] = ta.trend.ema_indicator(close, window=9)
+    df["EMA_21"] = ta.trend.ema_indicator(close, window=21)
+    df["RSI"] = ta.momentum.rsi(close, window=14)
 
     df["Signal"] = "Hold"
     df["Prev_EMA_9"] = df["EMA_9"].shift(1)
@@ -36,7 +47,7 @@ def generate_signals(df):
         ):
             df.at[df.index[i], "Signal"] = "Sell"
 
-    # Restrict to 1 signal per day
+    # Only one signal per day
     df["Date"] = df.index.date
     df["Signal_Rank"] = df.groupby("Date")["Signal"].transform(
         lambda x: (x != "Hold").cumsum()
