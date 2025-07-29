@@ -9,7 +9,7 @@ st.title("USD/JPY Signal Generator and Backtester (Yahoo Finance)")
 @st.cache_data
 def fetch_data():
     symbol = "JPY=X"  # Yahoo Finance symbol for USD/JPY
-    df = yf.download(symbol, period="5y", interval="1h")  # 5 years of hourly data
+    df = yf.download(symbol, period="5y", interval="1d")  # 5 years of hourly data
     df.index = pd.to_datetime(df.index)
     return df
 
